@@ -4,20 +4,36 @@ import discord
 from discord.ext import commands
 import asyncio
 import os
+import sys
+import aiohttp
 
-# Servidor para Render não cair
+# ⚙️ SERVIDOR + CUTUCADA PARA NUNCA DORMIR
 app = Flask('')
+
 @app.route('/')
 def home():
-    return "✅ Bot rodando!"
-def run():
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
+    return "✅ BOT LIGADO E ACORDADO!"
 
-# Configurações
+def run_server():
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)), use_reloader=False)
+
+# 🔁 TAREFA QUE CUTUCA O PRÓPRIO SITE A CADA 5 MINUTOS
+async def manter_acordado(url):
+    await asyncio.sleep(10)
+    while True:
+        try:
+            async with aiohttp.ClientSession() as sessao:
+                async with sessao.get(url) as resp:
+                    print(f"🔄 Cutucada: Status {resp.status}")
+        except Exception as e:
+            print(f"⚠️ Erro na cutucada: {e}")
+        await asyncio.sleep(300)  # 5 minutos = 300 segundos
+
+# 🤖 CONFIG DO BOT
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="/", intents=intents)
 
-# Variáveis
+# 📝 VARIÁVEIS GLOBAIS
 mensagem_padrao = None
 canal_alvo = None
 inicio_minutos = 10
@@ -26,26 +42,30 @@ ligado = False
 cargo_permitido = None
 tarefa_loop = None
 
+# ✅ EVENTO QUANDO LIGA
 @bot.event
 async def on_ready():
-    print(f"✅ Bot ONLINE: {bot.user}")
+    print(f"✅ BOT ONLINE: {bot.user}")
     try:
         await bot.tree.sync()
-        print("✅ Comandos prontos!")
+        print("✅ COMANDOS PRONTOS!")
     except Exception as e:
-        print(f"Erro: {e}")
+        print(f"Erro sincronia: {e}")
+    
+    # 🚀 INICIA A CUTUCADA AUTOMÁTICA
+    url_do_seu_site = f"https://{os.getenv('RENDER_SERVICE_NAME', 'bot-automsg')}.onrender.com"
+    bot.loop.create_task(manter_acordado(url_do_seu_site))
+    print(f"🔁 Manutenção ativada: {url_do_seu_site}")
 
-@bot.tree.command(name="automsg", description="Define a mensagem a enviar")
+# 📩 COMANDO 1: DEFINIR MENSAGEM
+@bot.tree.command(name="automsg", description="Salva o texto para enviar")
 async def automsg(interaction: discord.Interaction, *, texto: str):
     global mensagem_padrao
     mensagem_padrao = texto
     await interaction.response.send_message(f"✅ Mensagem: `{texto}`", ephemeral=True)
 
-# ✅ AQUI É A CHAVE: nomes exatos e defer rápido
-@bot.tree.command(
-    name="configmsg",
-    description="Uso: /configmsg canal:#canal inicio:10 intervalo:5"
-)
+# ⚙️ COMANDO 2: CONFIGURAR CANAL E TEMPOS
+@bot.tree.command(name="configmsg", description="Uso: /configmsg canal:#canal inicio:5 intervalo:10")
 async def configmsg(
     interaction: discord.Interaction,
     canal: discord.TextChannel,
@@ -53,63 +73,69 @@ async def configmsg(
     intervalo: int
 ):
     global canal_alvo, inicio_minutos, intervalo_minutos, tarefa_loop
-
-    # Responde IMEDIATO para não dar erro "não respondeu"
     await interaction.response.defer(ephemeral=True)
 
-    # Salva valores
     canal_alvo = canal
     inicio_minutos = inicio
     intervalo_minutos = intervalo
 
-    # Reinicia loop com novos tempos
     if tarefa_loop and not tarefa_loop.done():
         tarefa_loop.cancel()
     ligado = False
-    tarefa_loop = bot.loop.create_task(loop_envio())
+    tarefa_loop = bot.loop.create_task(loop_seguro())
 
-    # Confirmação bonita
     await interaction.followup.send(
-        f"✅ TUDO OK:\n"
-        f"📢 Canal: {canal.mention}\n"
-        f"⏱️ 1ª mensagem: **{inicio}min**\n"
-        f"🔁 Repete: **{intervalo}min**",
+        f"✅ CONFIGURADO:\n📢 Canal: {canal.mention}\n⏱️ 1ª: {inicio}min\n🔁 Repete: {intervalo}min",
         ephemeral=True
     )
 
-# Loop PERFEITO: espera início → depois intervalo
-async def loop_envio():
+# 🛡️ LOOP ANTITRAVAMENTO (SE DER ERRO, REINICIA SOZINHO)
+async def loop_seguro():
     global ligado
     while True:
-        await asyncio.sleep(1)
-        if ligado and canal_alvo and mensagem_padrao:
+        await asyncio.sleep(2)
+        if not ligado or not canal_alvo or not mensagem_padrao:
+            continue
+        try:
             await asyncio.sleep(inicio_minutos * 60)
             while ligado and canal_alvo and mensagem_padrao:
                 try:
                     await canal_alvo.send(mensagem_padrao)
                 except Exception as e:
-                    print(f"Erro envio: {e}")
+                    print(f"❌ Erro ao enviar: {e}")
                 await asyncio.sleep(intervalo_minutos * 60)
+        except Exception as e:
+            print(f"🔁 Loop reiniciado: {e}")
+            await asyncio.sleep(5)
 
-@bot.tree.command(name="alternar", description="Liga/desliga o envio")
+# 🔛 COMANDO 3: LIGAR / DESLIGAR
+@bot.tree.command(name="alternar", description="Liga ou desliga o sistema")
 async def alternar(interaction: discord.Interaction):
     global ligado
+    await interaction.response.defer(ephemeral=True)
+
     if cargo_permitido and not any(r.id == cargo_permitido for r in interaction.user.roles):
-        return await interaction.response.send_message("❌ Sem permissão!", ephemeral=True)
+        return await interaction.followup.send("❌ Sem permissão!", ephemeral=True)
+
     ligado = not ligado
-    await interaction.response.send_message(
-        f"🟢 LIGADO!\n1ª: {inicio_minutos}min | Repete: {intervalo_minutos}min"
+    await interaction.followup.send(
+        f"🟢 LIGADO! 1ª: {inicio_minutos}min | Repete: {intervalo_minutos}min"
         if ligado else "🔴 DESLIGADO",
         ephemeral=True
     )
 
+# 🚀 INICIALIZA TAREFAS
 @bot.event
 async def setup_hook():
     global tarefa_loop
-    tarefa_loop = bot.loop.create_task(loop_envio())
+    tarefa_loop = bot.loop.create_task(loop_seguro())
 
-# Inicia servidor
-t = Thread(target=run)
-t.start()
-
-bot.run(os.getenv("DISCORD_TOKEN"))
+# 🧠 INICIA TUDO COM SEGURANÇA
+if __name__ == "__main__":
+    t = Thread(target=run_server, daemon=True)
+    t.start()
+    try:
+        bot.run(os.getenv("DISCORD_TOKEN"))
+    except Exception as e:
+        print(f"💥 ERRO CRÍTICO: {e}")
+        sys.exit(1)
